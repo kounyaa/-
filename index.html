@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Mini GTA Online</title>
+<style>
+body { margin:0; overflow:hidden; font-family:sans-serif; }
+#ui{
+  position:absolute;
+  top:10px;
+  left:10px;
+  z-index:10;
+  color:white;
+}
+input,button{
+  margin:2px;
+}
+.nameTag{
+  position:absolute;
+  color:white;
+  font-size:14px;
+  pointer-events:none;
+}
+#chatBox{
+  width:250px;
+  height:150px;
+  overflow:auto;
+  background:rgba(0,0,0,0.5);
+  padding:5px;
+  font-size:13px;
+  margin-top:5px;
+}
+</style>
+</head>
+<body>
+
+<div id="ui">
+<input id="nickname" placeholder="ニックネーム">
+<button onclick="createRoom()">部屋を作る</button>
+<input id="roomId" placeholder="部屋ID">
+<button onclick="joinRoom()">入る</button>
+<p id="myId"></p>
+
+<div id="chatBox"></div>
+<input id="chatInput" placeholder="メッセージ">
+<button onclick="sendChat()">送信</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+
+<script>
+
+// ===== 通信 =====
+let peer;
+let connections = [];
+let players = {};
+let myName = "";
+
+function createRoom(){
+  myName = document.getElementById("nickname").value || "Player";
+  peer = new Peer();
+
+  peer.on("open", id=>{
+    document.getElementById("myId").innerText = "部屋ID: " + id;
+  });
+
+  peer.on("connection", conn=>{
+    connections.push(conn);
+    setupConnection(conn);
+  });
+}
+
+function joinRoom(){
+  myName = document.getElementById("nickname").value || "Player";
+  const roomId = document.getElementById("roomId").value;
+  peer = new Peer();
+
+  peer.on("open", ()=>{
+    const conn = peer.connect(roomId);
+    connections.push(conn);
+    setupConnection(conn);
+  });
+}
+
+function setupConnection(conn){
+
+  conn.on("data", data=>{
+
+    // チャット受信
+    if(data.type === "chat"){
+      addChatMessage(data.name + ": " + data.message);
+      return;
+    }
+
+    // 位置同期
+    if(!players[conn.peer]){
+      const car = createCar(0x0066ff, data.name);
+      scene.add(car.group);
+      players[conn.peer] = car;
+    }
+
+    const p = players[conn.peer];
+    p.group.position.set(data.x,1,data.z);
+    p.group.rotation.y = data.rot;
+    p.nameDiv.innerText = data.name;
+  });
+
+  conn.on("close", ()=>{
+    if(players[conn.peer]){
+      scene.remove(players[conn.peer].group);
+      players[conn.peer].nameDiv.remove();
+      delete players[conn.peer];
+    }
+  });
+}
+
+// ===== チャット =====
+function sendChat(){
+  const input = document.getElementById("chatInput");
+  const message = input.value.trim();
+  if(message==="") return;
+
+  addChatMessage(myName + ": " + message);
+
+  connections.forEach(conn=>{
+    if(conn.open){
+      conn.send({
+        type:"chat",
+        name: myName,
+        message: message
+      });
+    }
+  });
+
+  input.value="";
+}
+
+function addChatMessage(text){
+  const box=document.getElementById("chatBox");
+  const div=document.createElement("div");
+  div.innerText=text;
+  box.appendChild(div);
+  box.scrollTop=box.scrollHeight;
+}
+
+// Enterで送信
+document.addEventListener("keydown",e=>{
+  if(e.key==="Enter"){
+    sendChat();
+  }
+});
+
+// ===== 3D =====
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+
+const camera = new THREE.PerspectiveCamera(75,window.innerWidth/window.innerHeight,0.1,1000);
+camera.position.set(0,5,10);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth,window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const light = new THREE.DirectionalLight(0xffffff,1);
+light.position.set(50,100,50);
+scene.add(light);
+
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(500,500),
+  new THREE.MeshPhongMaterial({color:0x2e2e2e})
+);
+ground.rotation.x = -Math.PI/2;
+scene.add(ground);
+
+// 建物
+const buildings=[];
+for(let i=0;i<40;i++){
+  const b=new THREE.Mesh(
+    new THREE.BoxGeometry(5,10,5),
+    new THREE.MeshPhongMaterial({color:0x888888})
+  );
+  b.position.set((Math.random()-0.5)*200,5,(Math.random()-0.5)*200);
+  scene.add(b);
+  buildings.push(b);
+}
+
+// 衝突
+function checkCollision(x,z){
+  for(let b of buildings){
+    if(Math.abs(x-b.position.x)<4 && Math.abs(z-b.position.z)<4){
+      return true;
+    }
+  }
+  return false;
+}
+
+// 車作成
+function createCar(color,name){
+  const group=new THREE.Group();
+
+  const body=new THREE.Mesh(
+    new THREE.BoxGeometry(2,1,4),
+    new THREE.MeshPhongMaterial({color})
+  );
+  body.position.y=1;
+  group.add(body);
+
+  const nameDiv=document.createElement("div");
+  nameDiv.className="nameTag";
+  nameDiv.innerText=name;
+  document.body.appendChild(nameDiv);
+
+  return {group,nameDiv};
+}
+
+// 自分
+const myCar=createCar(0xff0000,"");
+scene.add(myCar.group);
+
+// 操作
+let keys={};
+document.addEventListener("keydown",e=>keys[e.key]=true);
+document.addEventListener("keyup",e=>keys[e.key]=false);
+
+let speed=0;
+
+function animate(){
+  requestAnimationFrame(animate);
+
+  if(keys["w"]) speed=0.5;
+  else if(keys["s"]) speed=-0.3;
+  else speed*=0.9;
+
+  if(keys["a"]) myCar.group.rotation.y+=0.05;
+  if(keys["d"]) myCar.group.rotation.y-=0.05;
+
+  const oldPos=myCar.group.position.clone();
+  myCar.group.translateZ(-speed);
+
+  if(checkCollision(myCar.group.position.x,myCar.group.position.z)){
+    myCar.group.position.copy(oldPos);
+  }
+
+  // カメラ追尾
+  const offset=new THREE.Vector3(0,5,10);
+  const camPos=offset.applyMatrix4(myCar.group.matrixWorld);
+  camera.position.lerp(camPos,0.1);
+  camera.lookAt(myCar.group.position);
+
+  // 他プレイヤー名前位置更新
+  for(let id in players){
+    const p=players[id];
+    const pos=p.group.position.clone();
+    pos.y+=3;
+    pos.project(camera);
+    p.nameDiv.style.left=(pos.x*0.5+0.5)*window.innerWidth+"px";
+    p.nameDiv.style.top=(-pos.y*0.5+0.5)*window.innerHeight+"px";
+  }
+
+  // 送信
+  connections.forEach(conn=>{
+    if(conn.open){
+      conn.send({
+        x:myCar.group.position.x,
+        z:myCar.group.position.z,
+        rot:myCar.group.rotation.y,
+        name:myName
+      });
+    }
+  });
+
+  renderer.render(scene,camera);
+}
+animate();
+
+</script>
+</body>
+</html>
